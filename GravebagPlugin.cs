@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using Terraria;
 using Terraria.DataStructures;
@@ -14,10 +15,24 @@ namespace Gravebag
     [ApiVersion(2, 1)]
     public class GravebagPlugin : TerrariaPlugin
     {
+        class Gravebag
+        {
+            public Gravebag(TSPlayer player, Vector2 deathPos, Item[] fullInv)
+            {
+                playerIndex = player.Index;
+                accountID = player.Account.ID;
+                fullInventory = fullInv;
+                position = deathPos;
+            }
+            public int playerIndex = -1;
+            public int accountID;
+            public Item[] fullInventory;
+            public Vector2 position;
+        }
 
-        public Dictionary<int, Item[]> Gravebags = new Dictionary<int, Item[]>();
+        private Dictionary<int, Gravebag> gravebags = new Dictionary<int, Gravebag>();
 
-        private int TotalSlots = NetItem.InventorySlots + NetItem.ArmorSlots
+        static readonly int TotalSlots = NetItem.InventorySlots + NetItem.ArmorSlots
             + NetItem.DyeSlots + NetItem.MiscEquipSlots + NetItem.MiscDyeSlots;
 
         #region Info
@@ -75,20 +90,21 @@ namespace Gravebag
             Console.WriteLine("[Gravebags Death]");
 
             Player player = args.Player.TPlayer;
-            Item[] fullInv = new Item[99];
+            if (player.difficulty != 1) return;
 
-            player.inventory.CopyTo(fullInv, 0);
-            player.armor.CopyTo(fullInv, 59);
-            player.dye.CopyTo(fullInv, 79);
-            player.miscEquips.CopyTo(fullInv, 89);
-            player.miscDyes.CopyTo(fullInv, 94);
+            Item[] fullInv = new Item[TotalSlots];
+            player.inventory.CopyTo(fullInv, NetItem.InventoryIndex.Item1);
+            player.armor.CopyTo(fullInv, NetItem.ArmorIndex.Item1);
+            player.dye.CopyTo(fullInv, NetItem.DyeIndex.Item1);
+            player.miscEquips.CopyTo(fullInv, NetItem.MiscEquipIndex.Item1);
+            player.miscDyes.CopyTo(fullInv, NetItem.MiscDyeIndex.Item1);
 
+            // suppress item drops
             int i = 0;
             foreach (Item item in fullInv)
             {
-                if (item.netID == 3506 || item.netID == 3507 || item.netID == 3509) continue;
+                if (item.stack == 0 || item.netID == 3506 || item.netID == 3507 || item.netID == 3509) continue;
 
-                // suppress item drops
                 int last = i;
                 do
                 {
@@ -98,7 +114,7 @@ namespace Gravebag
                         invItem.stack == item.stack &&
                         invItem.prefix == item.prefix)
                     {
-                        Main.item[i].netID = 0;
+                        Main.item[i].netDefaults(0);
                         Main.item[i].active = false;
                         NetMessage.SendData(21, -1, -1, null, i, 0);
                     }
@@ -106,122 +122,162 @@ namespace Gravebag
                 } while (i != last);
             }
 
-            Vector2 pos = args.Player.LastNetPosition;
-            Console.WriteLine("Died at ({0}, {1})", pos.X, pos.Y);
+            SpawnGravebag(args.Player, args.Player.LastNetPosition, fullInv);
+        }
 
-            int itemID = Item.NewItem(new EntitySource_DebugCommand(), pos, Vector2.Zero, 3331);
 
-            Gravebags[itemID] = fullInv;
+        void OnPlayerUpdate(object _, GetDataHandlers.PlayerUpdateEventArgs args)
+        {
+            if (!args.Player.Dead) CheckGravebags(args.Player);
+        }
+
+        void OnPlayerSlot(object _, GetDataHandlers.PlayerSlotEventArgs args) { }
+
+        void OnItemDrop(object _, GetDataHandlers.ItemDropEventArgs args) { }
+
+        #endregion
+
+        int SpawnGravebag(TSPlayer player, Vector2 position, Item[] fullInv)
+        {
+            int itemID = Item.NewItem(new EntitySource_DebugCommand(), position, Vector2.Zero, 3331);
+
+            gravebags[itemID] = new Gravebag(player, position, fullInv);
 
             // Drop only for the player that died
             Main.item[itemID].playerIndexTheItemIsReservedFor = 255;
             Main.item[itemID].keepTime = int.MaxValue;
-            args.Player.SendData(PacketTypes.ItemOwner, null, itemID);
-
+            TSPlayer.All.SendData(PacketTypes.ItemOwner, null, itemID);
+            return itemID;
         }
 
-        void OnPlayerUpdate(object _, GetDataHandlers.PlayerUpdateEventArgs args)
+        void CheckGravebags(TSPlayer player)
         {
-            if (args.Player.Dead) return;
-            foreach (int itemID in Gravebags.Keys)
+            foreach (int itemIndex in gravebags.Keys.ToList())
             {
-                Item item = Main.item[itemID];
+                Gravebag bag = gravebags[itemIndex];
 
-                if (args.Position.Distance(item.position) <= 32.0)
+                if (player.Account.ID != bag.accountID) continue;
+                Item item = Main.item[itemIndex];
+
+                // respawn bag if not present
+                if (!item.active || item.netID != 3331)
                 {
-                    PickupGravebag(args.Player, itemID);
+                    gravebags.Remove(itemIndex);
+                    SpawnGravebag(player, bag.position, bag.fullInventory);
+                    continue;
+                }
+
+                bag.position = item.position;
+
+                // check within 3 blocks
+                if (bag.position.Distance(player.LastNetPosition) <= 48.0)
+                {
+                    PickupGravebag(player, itemIndex);
                 }
             }
         }
 
-        void GetSubInventoryIndex(Player player, int i, out Item[] subInv, out int index)
-        {
-            if (i < NetItem.InventorySlots)
-            {
-                index = i;
-                subInv = player.inventory;
-            }
-            else if (i < NetItem.InventorySlots + NetItem.ArmorSlots)
-            {
-                index = i - NetItem.InventorySlots;
-                subInv = player.armor;
-            }
-            else if (i < NetItem.InventorySlots + NetItem.ArmorSlots + NetItem.DyeSlots)
-            {
-                index = i - NetItem.InventorySlots - NetItem.ArmorSlots;
-                subInv = player.dye;
-            }
-            else if (i < NetItem.InventorySlots + NetItem.ArmorSlots + NetItem.DyeSlots + NetItem.MiscEquipSlots)
-            {
-                index = i - NetItem.InventorySlots - NetItem.ArmorSlots - NetItem.DyeSlots;
-                subInv = player.miscEquips;
-            }
-            else
-            {
-                index = i - NetItem.InventorySlots - NetItem.ArmorSlots - NetItem.DyeSlots - NetItem.MiscEquipSlots;
-                subInv = player.miscDyes;
-            }
-        }
         void PickupGravebag(TSPlayer player, int itemID)
         {
-            Console.WriteLine("[Pick up Gravebag]");
-            Item[] inv = Gravebags[itemID];
+            Console.WriteLine("[Pick up Gravebag {0}]", itemID);
+            Gravebag bag = gravebags[itemID];
 
-            Stack<Item> overflow = new Stack<Item>();
+            List<int> pickUpItems = new List<int>();
 
             for (int i = 0; i < TotalSlots; i++)
             {
-                Console.Write("{0} ", i);
-                if (i % 10 == 9) Console.WriteLine();
-                Item item = inv[i];
+                Item item = bag.fullInventory[i];
                 if (item.stack == 0 || item.netID == 3506 || item.netID == 3507 || item.netID == 3509) continue;
 
                 if (Main.ServerSideCharacter)
                 {
                     GetSubInventoryIndex(player.TPlayer, i, out Item[] subInv, out int index);
-                    if (subInv[index].stack == 0) 
+                    if (subInv[index].stack == 0)
                     {
-                        subInv[index] = item;
+                        subInv[index] = item.Clone();
+                        NetMessage.SendData((int)PacketTypes.PlayerSlot, -1, -1, null, player.Index, i, item.prefix);
+                        item.netDefaults(0);
                     }
-                    else 
+                    else
                     {
-                        overflow.Push(item);
+                        pickUpItems.Add(i);
                     }
-                    NetMessage.SendData((int)PacketTypes.PlayerSlot, -1, -1, null, player.Index, i, item.prefix);
                 }
                 else
                 {
-                    player.GiveItem(item.netID, item.stack, item.prefix);
+                    pickUpItems.Add(i);
                 }
             }
 
-            // Give remaining items 
-            if (overflow.Count > 0)
+            // Give remaining items
+            bool overflow = false;
+            if (pickUpItems.Count > 0)
             {
-                foreach (Item item in overflow)
+                foreach (int i in pickUpItems)
                 {
-                    player.GiveItem(item.netID, item.stack, item.prefix);
+                    Item item = bag.fullInventory[i];
+
+                    // Fill item server-side first, since item is not immediately updated server-side. This simulates
+                    // the item entering the players inventory, so that we can calculate whether the player can take more.
+                    if (player.TPlayer.ItemSpace(item).CanTakeItem)
+                    {
+                        player.TPlayer.GetItem(-1, item.Clone(), GetItemSettings.PickupItemFromWorld);
+                        int itemIndex = Item.NewItem(new EntitySource_DebugCommand(), player.LastNetPosition, Vector2.Zero, 
+                            item.netID, item.stack, false, item.prefix);
+                        Main.item[itemIndex].playerIndexTheItemIsReservedFor = player.Index;
+                        player.SendData(PacketTypes.ItemOwner, null, itemIndex);
+
+                        item.netDefaults(0);
+                    }
+                    else
+                    {
+                        overflow = true;
+                    }
                 }
             }
 
-            Gravebags.Remove(itemID);
+            if (overflow) return;
+
+            Console.WriteLine("Delete Gravebag");
+
+            gravebags.Remove(itemID);
             Main.item[itemID].active = false;
             Main.item[itemID].keepTime = 0;
             TSPlayer.All.SendData(PacketTypes.ItemDrop, null, itemID);
-
         }
 
-        void OnPlayerSlot(object _, GetDataHandlers.PlayerSlotEventArgs args)
+        void GetSubInventoryIndex(Player player, int i, out Item[] subInv, out int index)
         {
-
+            if (i < NetItem.InventoryIndex.Item2)
+            {
+                index = i - NetItem.InventoryIndex.Item1;
+                subInv = player.inventory;
+            }
+            else if (i < NetItem.ArmorIndex.Item2)
+            {
+                index = i - NetItem.ArmorIndex.Item1;
+                subInv = player.armor;
+            }
+            else if (i < NetItem.DyeIndex.Item2)
+            {
+                index = i - NetItem.DyeIndex.Item1;
+                subInv = player.dye;
+            }
+            else if (i < NetItem.MiscEquipIndex.Item2)
+            {
+                index = i - NetItem.MiscEquipIndex.Item1;
+                subInv = player.miscEquips;
+            }
+            else if (i < NetItem.MiscDyeIndex.Item2)
+            {
+                index = i - NetItem.MiscDyeIndex.Item1;
+                subInv = player.miscDyes;
+            }
+            else
+            {
+                throw new ArgumentOutOfRangeException("i", "Index out of range");
+            }
         }
-
-        void OnItemDrop(object _, GetDataHandlers.ItemDropEventArgs args)
-        {
-
-        }
-
-        #endregion
 
     }
 }
