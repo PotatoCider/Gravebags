@@ -51,8 +51,6 @@ namespace Gravebag
             ServerApi.Hooks.GameInitialize.Register(this, OnInitialize);
 
             GetDataHandlers.KillMe.Register(OnKillMe);
-            GetDataHandlers.PlayerSlot.Register(OnPlayerSlot);
-            GetDataHandlers.ItemDrop.Register(OnItemDrop, HandlerPriority.Low, true);
             GetDataHandlers.PlayerUpdate.Register(OnPlayerUpdate);
         }
         #endregion
@@ -64,8 +62,6 @@ namespace Gravebag
             {
                 ServerApi.Hooks.GameInitialize.Deregister(this, OnInitialize);
                 GetDataHandlers.KillMe.UnRegister(OnKillMe);
-                GetDataHandlers.PlayerSlot.UnRegister(OnPlayerSlot);
-                GetDataHandlers.ItemDrop.UnRegister(OnItemDrop);
                 GetDataHandlers.PlayerUpdate.UnRegister(OnPlayerUpdate);
             }
             base.Dispose(disposing);
@@ -129,10 +125,6 @@ namespace Gravebag
         {
             if (!args.Player.Dead) CheckGravebags(args.Player);
         }
-
-        void OnPlayerSlot(object _, GetDataHandlers.PlayerSlotEventArgs args) { }
-
-        void OnItemDrop(object _, GetDataHandlers.ItemDropEventArgs args) { }
 
         #endregion
 
