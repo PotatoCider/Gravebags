@@ -97,7 +97,7 @@ namespace Gravebag
             int i = 0;
             foreach (Item item in fullInv)
             {
-                if (item.stack == 0 || IgnoreMediumcoreInventory(item)) continue;
+                if (item.stack == 0 || IsMediumcoreIgnoredItem(item)) continue;
 
                 int last = i;
                 do
@@ -130,7 +130,7 @@ namespace Gravebag
 
         int SpawnGravebag(TSPlayer player, Vector2 position, Item[] fullInv)
         {
-            int itemID = Item.NewItem(new EntitySource_DebugCommand(), position, Vector2.Zero, 3331);
+            int itemID = Item.NewItem(new EntitySource_DebugCommand(), position, Vector2.Zero, ItemID.CultistBossBag);
 
             gravebags[itemID] = new Gravebag(player, position, fullInv);
 
@@ -179,7 +179,7 @@ namespace Gravebag
             for (int i = 0; i < TotalSlots; i++)
             {
                 Item item = bag.fullInventory[i];
-                if (item.stack == 0 || IgnoreMediumcoreInventory(item)) continue;
+                if (item.stack == 0 || IsMediumcoreIgnoredItem(item)) continue;
 
                 if (Main.ServerSideCharacter)
                 {
@@ -188,7 +188,8 @@ namespace Gravebag
                     {
                         subInv[index] = item.Clone();
                         NetMessage.SendData((int)PacketTypes.PlayerSlot, -1, -1, null, player.Index, i, item.prefix);
-                        item.netDefaults(0);
+
+                        item.netDefaults(ItemID.None);
                     }
                     else
                     {
@@ -242,6 +243,8 @@ namespace Gravebag
             TSPlayer.All.SendData(PacketTypes.ItemDrop, null, itemID);
         }
 
+        #region Helpers
+
         void GetSubInventoryIndex(Player player, int i, out Item[] subInv, out int index)
         {
             if (i < NetItem.InventoryIndex.Item2)
@@ -275,11 +278,13 @@ namespace Gravebag
             }
         }
         
-        bool IgnoreMediumcoreInventory(Item item)
+        bool IsMediumcoreIgnoredItem(Item item)
         {
             return item.netID == ItemID.CopperShortsword ||
                     item.netID == ItemID.CopperPickaxe ||
                     item.netID == ItemID.CopperAxe;
         }
+
+        #endregion
     }
 }
