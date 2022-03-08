@@ -82,15 +82,13 @@ namespace Gravebag
 
         void OnInitialize(EventArgs args)
         {
-            Console.WriteLine("[Gravebags Init]");
+            Console.WriteLine("[Gravebags] Init");
         }
 
         void OnKillMe(object _, GetDataHandlers.KillMeEventArgs args)
         {
-            Console.WriteLine("[Gravebags Death]");
-
             Player player = args.Player.TPlayer;
-            if (player.difficulty != 1) return;
+            if (player.difficulty != PlayerDifficultyID.MediumCore) return;
 
             Item[] fullInv = new Item[TotalSlots];
             player.inventory.CopyTo(fullInv, NetItem.InventoryIndex.Item1);
@@ -103,7 +101,7 @@ namespace Gravebag
             int i = 0;
             foreach (Item item in fullInv)
             {
-                if (item.stack == 0 || item.netID == 3506 || item.netID == 3507 || item.netID == 3509) continue;
+                if (item.stack == 0 || IgnoreMediumcoreInventory(item)) continue;
 
                 int last = i;
                 do
@@ -114,9 +112,10 @@ namespace Gravebag
                         invItem.stack == item.stack &&
                         invItem.prefix == item.prefix)
                     {
-                        Main.item[i].netDefaults(0);
+                        Main.item[i].netDefaults(ItemID.None);
                         Main.item[i].active = false;
-                        NetMessage.SendData(21, -1, -1, null, i, 0);
+                        NetMessage.SendData((int)PacketTypes.ItemDrop, -1, -1, null, i, 0);
+                        break;
                     }
                     i = (i + 1) % 400;
                 } while (i != last);
@@ -144,9 +143,11 @@ namespace Gravebag
             gravebags[itemID] = new Gravebag(player, position, fullInv);
 
             // Drop only for the player that died
-            Main.item[itemID].playerIndexTheItemIsReservedFor = 255;
+            Main.item[itemID].playerIndexTheItemIsReservedFor = TSPlayer.Server.Index;
             Main.item[itemID].keepTime = int.MaxValue;
             TSPlayer.All.SendData(PacketTypes.ItemOwner, null, itemID);
+
+            Console.WriteLine("[Gravebags] Spawn {0}", itemID);
             return itemID;
         }
 
@@ -160,7 +161,7 @@ namespace Gravebag
                 Item item = Main.item[itemIndex];
 
                 // respawn bag if not present
-                if (!item.active || item.netID != 3331)
+                if (!item.active || item.netID != ItemID.CultistBossBag)
                 {
                     gravebags.Remove(itemIndex);
                     SpawnGravebag(player, bag.position, bag.fullInventory);
@@ -179,7 +180,6 @@ namespace Gravebag
 
         void PickupGravebag(TSPlayer player, int itemID)
         {
-            Console.WriteLine("[Pick up Gravebag {0}]", itemID);
             Gravebag bag = gravebags[itemID];
 
             List<int> pickUpItems = new List<int>();
@@ -187,7 +187,7 @@ namespace Gravebag
             for (int i = 0; i < TotalSlots; i++)
             {
                 Item item = bag.fullInventory[i];
-                if (item.stack == 0 || item.netID == 3506 || item.netID == 3507 || item.netID == 3509) continue;
+                if (item.stack == 0 || IgnoreMediumcoreInventory(item)) continue;
 
                 if (Main.ServerSideCharacter)
                 {
@@ -211,6 +211,7 @@ namespace Gravebag
 
             // Give remaining items
             bool overflow = false;
+            bool pickUp = false;
             if (pickUpItems.Count > 0)
             {
                 foreach (int i in pickUpItems)
@@ -227,7 +228,8 @@ namespace Gravebag
                         Main.item[itemIndex].playerIndexTheItemIsReservedFor = player.Index;
                         player.SendData(PacketTypes.ItemOwner, null, itemIndex);
 
-                        item.netDefaults(0);
+                        item.netDefaults(ItemID.None);
+                        pickUp = true;
                     }
                     else
                     {
@@ -236,9 +238,11 @@ namespace Gravebag
                 }
             }
 
+            if (pickUp) Console.WriteLine("[Gravebags] Pick up {0}", itemID);
+
             if (overflow) return;
 
-            Console.WriteLine("Delete Gravebag");
+            Console.WriteLine("[Gravebags] Delete {0}");
 
             gravebags.Remove(itemID);
             Main.item[itemID].active = false;
@@ -278,6 +282,12 @@ namespace Gravebag
                 throw new ArgumentOutOfRangeException("i", "Index out of range");
             }
         }
-
+        
+        bool IgnoreMediumcoreInventory(Item item)
+        {
+            return item.netID == ItemID.CopperShortsword ||
+                    item.netID == ItemID.CopperPickaxe ||
+                    item.netID == ItemID.CopperAxe;
+        }
     }
 }
