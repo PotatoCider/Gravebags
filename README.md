@@ -12,13 +12,14 @@ Server Side Characters is recommended for more convienent inventory management.
 - Gravebags contain all the items dropped upon death and will automatically fill your inventory when picked up (with/without SSC)
 - SSC players have the added benefit of retaining the location of the items in the inventory.
 - Leftover items in the bag will not be picked up if your inventory is full.
+- Gravebags are saved even after the server restarts.
 
 # Warning
-- Gravebags may be lost after server restart (thereby losing your dropped items).
 - You may encounter some bugs, if so, please let me know on Discord (PotatoCider#9092)
 
 # Planned Features
-- [ ] Persist gravebags after server restart
+- [x] Persist gravebags after server restart
+- [ ] Notify player of gravebag info when near bag
 - [ ] Add a way for other players to pick up other player's gravebags
 - [ ] Drop gravebags for hardcore players
 - [ ] Add an admin command to recover gravebags in case something went wrong

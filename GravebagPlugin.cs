@@ -10,27 +10,15 @@ using Microsoft.Xna.Framework;
 using Terraria.ID;
 using System.Collections.Generic;
 
-namespace Gravebag
+namespace Gravebags
 {
     [ApiVersion(2, 1)]
     public class GravebagPlugin : TerrariaPlugin
     {
-        class Gravebag
-        {
-            public Gravebag(TSPlayer player, Vector2 deathPos, Item[] fullInv)
-            {
-                playerIndex = player.Index;
-                accountID = player.Account.ID;
-                fullInventory = fullInv;
-                position = deathPos;
-            }
-            public int playerIndex = -1;
-            public int accountID;
-            public Item[] fullInventory;
-            public Vector2 position;
-        }
-
+        // Gravebags by Main.item index
         private Dictionary<int, Gravebag> gravebags = new Dictionary<int, Gravebag>();
+
+        public GravebagManager dbManager;
 
         static readonly int TotalSlots = NetItem.InventorySlots + NetItem.ArmorSlots
             + NetItem.DyeSlots + NetItem.MiscEquipSlots + NetItem.MiscDyeSlots;
@@ -48,7 +36,9 @@ namespace Gravebag
         #region Initialize
         public override void Initialize()
         {
-            ServerApi.Hooks.GameInitialize.Register(this, OnInitialize);
+            dbManager = new GravebagManager(TShock.DB);
+
+            ServerApi.Hooks.GamePostInitialize.Register(this, OnGamePostInitialize);
 
             GetDataHandlers.KillMe.Register(OnKillMe);
             GetDataHandlers.PlayerUpdate.Register(OnPlayerUpdate);
@@ -60,7 +50,7 @@ namespace Gravebag
         {
             if (disposing)
             {
-                ServerApi.Hooks.GameInitialize.Deregister(this, OnInitialize);
+                ServerApi.Hooks.GamePostInitialize.Deregister(this, OnGamePostInitialize);
                 GetDataHandlers.KillMe.UnRegister(OnKillMe);
                 GetDataHandlers.PlayerUpdate.UnRegister(OnPlayerUpdate);
             }
@@ -71,14 +61,19 @@ namespace Gravebag
         public GravebagPlugin(Main game)
             : base(game)
         {
-            Order = 10;
+            Order = 1;
         }
 
         #region Handlers
 
-        void OnInitialize(EventArgs args)
+        void OnGamePostInitialize(EventArgs args)
         {
-            Console.WriteLine("[Gravebags] Init");
+            TShock.Log.Debug("[Gravebags] Post Initialize");
+            List<Gravebag> bags = dbManager.GetAllGravebags(Main.worldID);
+            foreach (Gravebag bag in bags)
+            {
+                SpawnGravebag(bag);
+            }
         }
 
         void OnKillMe(object _, GetDataHandlers.KillMeEventArgs args)
@@ -86,38 +81,40 @@ namespace Gravebag
             Player player = args.Player.TPlayer;
             if (player.difficulty != PlayerDifficultyID.MediumCore) return;
 
-            Item[] fullInv = new Item[TotalSlots];
-            player.inventory.CopyTo(fullInv, NetItem.InventoryIndex.Item1);
-            player.armor.CopyTo(fullInv, NetItem.ArmorIndex.Item1);
-            player.dye.CopyTo(fullInv, NetItem.DyeIndex.Item1);
-            player.miscEquips.CopyTo(fullInv, NetItem.MiscEquipIndex.Item1);
-            player.miscDyes.CopyTo(fullInv, NetItem.MiscDyeIndex.Item1);
+            List<NetItem> inventory = new List<NetItem>(TotalSlots);
+            inventory.AddRange(player.inventory.Select(item => (NetItem)item));
+            inventory.AddRange(player.armor.Select(item => (NetItem)item));
+            inventory.AddRange(player.dye.Select(item => (NetItem)item));
+            inventory.AddRange(player.miscEquips.Select(item => (NetItem)item));
+            inventory.AddRange(player.miscDyes.Select(item => (NetItem)item));
 
             // suppress item drops
             int i = 0;
-            foreach (Item item in fullInv)
+            foreach (NetItem item in inventory)
             {
-                if (item.stack == 0 || IsMediumcoreIgnoredItem(item)) continue;
+                if (item.Stack == 0 || IsMediumcoreIgnoredItem(item.NetId)) continue;
 
                 int last = i;
                 do
                 {
-                    Item invItem = Main.item[i];
-                    if (invItem.active &&
-                        invItem.netID == item.netID &&
-                        invItem.stack == item.stack &&
-                        invItem.prefix == item.prefix)
+                    Item floorItem = Main.item[i];
+                    if (floorItem.active &&
+                        floorItem.netID == item.NetId &&
+                        floorItem.stack == item.Stack &&
+                        floorItem.prefix == item.PrefixId)
                     {
                         Main.item[i].netDefaults(ItemID.None);
                         Main.item[i].active = false;
-                        NetMessage.SendData((int)PacketTypes.ItemDrop, -1, -1, null, i, 0);
+                        NetMessage.SendData((int)PacketTypes.ItemDrop, -1, -1, null, i);
                         break;
                     }
                     i = (i + 1) % 400;
                 } while (i != last);
             }
 
-            SpawnGravebag(args.Player, args.Player.LastNetPosition, fullInv);
+            Gravebag bag = dbManager.PersistGravebag(Main.worldID, args.Player.Account.ID, args.Player.LastNetPosition, inventory);
+
+            SpawnGravebag(bag);
         }
 
 
@@ -128,18 +125,18 @@ namespace Gravebag
 
         #endregion
 
-        int SpawnGravebag(TSPlayer player, Vector2 position, Item[] fullInv)
+        int SpawnGravebag(Gravebag bag)
         {
-            int itemID = Item.NewItem(new EntitySource_DebugCommand(), position, Vector2.Zero, ItemID.CultistBossBag);
+            int itemID = Item.NewItem(new EntitySource_DebugCommand(), bag.position, Vector2.Zero, ItemID.CultistBossBag);
 
-            gravebags[itemID] = new Gravebag(player, position, fullInv);
+            gravebags[itemID] = bag;
 
             // Drop only for the player that died
             Main.item[itemID].playerIndexTheItemIsReservedFor = TSPlayer.Server.Index;
             Main.item[itemID].keepTime = int.MaxValue;
             TSPlayer.All.SendData(PacketTypes.ItemOwner, null, itemID);
 
-            Console.WriteLine("[Gravebags] Spawn {0}", itemID);
+            TShock.Log.Debug("[Gravebags] Spawn {0} item {1}", bag.ID, itemID);
             return itemID;
         }
 
@@ -148,22 +145,35 @@ namespace Gravebag
             foreach (int itemIndex in gravebags.Keys.ToList())
             {
                 Gravebag bag = gravebags[itemIndex];
+                float distance = bag.position.Distance(player.LastNetPosition);
 
-                if (player.Account.ID != bag.accountID) continue;
-                Item item = Main.item[itemIndex];
+                // ignore players more than 50 blocks away
+                if (distance > 800.0) continue;
+
+                Item floorItem = Main.item[itemIndex];
 
                 // respawn bag if not present
-                if (!item.active || item.netID != ItemID.CultistBossBag)
+                if (!floorItem.active || floorItem.netID != ItemID.CultistBossBag)
                 {
                     gravebags.Remove(itemIndex);
-                    SpawnGravebag(player, bag.position, bag.fullInventory);
+                    SpawnGravebag(bag);
                     continue;
                 }
 
-                bag.position = item.position;
+                if (floorItem.position.Distance(bag.position) > 16.0 && floorItem.velocity.Equals(Vector2.Zero))
+                {
+                    bag.position = floorItem.position;
+                    dbManager.UpdateGravebagPosition(bag.ID, bag.position);
+                    TShock.Log.Debug("[Gravebags] Update Position {0} item {1} pos ({2}, {3})", bag.ID, itemIndex, bag.position.X, bag.position.Y);
+                }
+
+                // sync bag position
+                NetMessage.SendData((int)PacketTypes.ItemDrop, -1, -1, null, itemIndex);
+
+                if (player.Account.ID != bag.accountID) continue;
 
                 // check within 3 blocks
-                if (bag.position.Distance(player.LastNetPosition) <= 48.0)
+                if (distance <= 48.0)
                 {
                     PickupGravebag(player, itemIndex);
                 }
@@ -178,18 +188,19 @@ namespace Gravebag
 
             for (int i = 0; i < TotalSlots; i++)
             {
-                Item item = bag.fullInventory[i];
-                if (item.stack == 0 || IsMediumcoreIgnoredItem(item)) continue;
+                NetItem item = bag.inventory[i];
+                if (item.NetId == ItemID.None || IsMediumcoreIgnoredItem(item.NetId)) continue;
 
                 if (Main.ServerSideCharacter)
                 {
                     GetSubInventoryIndex(player.TPlayer, i, out Item[] subInv, out int index);
-                    if (subInv[index].stack == 0)
+                    if (subInv[index].netID == ItemID.None || IsMediumcoreIgnoredItem(subInv[index].netID))
                     {
-                        subInv[index] = item.Clone();
-                        NetMessage.SendData((int)PacketTypes.PlayerSlot, -1, -1, null, player.Index, i, item.prefix);
+                        subInv[index] = NetItemToItem(item);
 
-                        item.netDefaults(ItemID.None);
+                        NetMessage.SendData((int)PacketTypes.PlayerSlot, -1, -1, null, player.Index, i, item.PrefixId);
+
+                        bag.inventory[i] = new NetItem();
                     }
                     else
                     {
@@ -209,19 +220,20 @@ namespace Gravebag
             {
                 foreach (int i in pickUpItems)
                 {
-                    Item item = bag.fullInventory[i];
+                    Item item = NetItemToItem(bag.inventory[i]);
 
                     // Fill item server-side first, since item is not immediately updated server-side. This simulates
                     // the item entering the players inventory, so that we can calculate whether the player can take more.
                     if (player.TPlayer.ItemSpace(item).CanTakeItem)
                     {
-                        player.TPlayer.GetItem(-1, item.Clone(), GetItemSettings.PickupItemFromWorld);
+                        player.TPlayer.GetItem(-1, item, GetItemSettings.PickupItemFromWorld);
                         int itemIndex = Item.NewItem(new EntitySource_DebugCommand(), player.LastNetPosition, Vector2.Zero, 
-                            item.netID, item.stack, false, item.prefix);
+                            item.netID, item.stack, false, item.prefix, true);
+
                         Main.item[itemIndex].playerIndexTheItemIsReservedFor = player.Index;
                         player.SendData(PacketTypes.ItemOwner, null, itemIndex);
 
-                        item.netDefaults(ItemID.None);
+                        bag.inventory[i] = new NetItem();
                         pickUp = true;
                     }
                     else
@@ -231,16 +243,17 @@ namespace Gravebag
                 }
             }
 
-            if (pickUp) Console.WriteLine("[Gravebags] Pick up {0}", itemID);
+            if (pickUp) TShock.Log.Debug("[Gravebags] Pick up {0} item {1}", bag.ID, itemID);
 
             if (overflow) return;
 
-            Console.WriteLine("[Gravebags] Delete {0}");
+            TShock.Log.Debug("[Gravebags] Delete {0} item {1}", bag.ID, itemID);
 
             gravebags.Remove(itemID);
             Main.item[itemID].active = false;
             Main.item[itemID].keepTime = 0;
             TSPlayer.All.SendData(PacketTypes.ItemDrop, null, itemID);
+            dbManager.RemoveGravebag(bag.ID);
         }
 
         #region Helpers
@@ -278,11 +291,20 @@ namespace Gravebag
             }
         }
         
-        bool IsMediumcoreIgnoredItem(Item item)
+        bool IsMediumcoreIgnoredItem(int netID)
         {
-            return item.netID == ItemID.CopperShortsword ||
-                    item.netID == ItemID.CopperPickaxe ||
-                    item.netID == ItemID.CopperAxe;
+            return netID == ItemID.CopperShortsword ||
+                    netID == ItemID.CopperPickaxe ||
+                    netID == ItemID.CopperAxe;
+        }
+
+        Item NetItemToItem(NetItem netItem)
+        {
+            Item item = new Item();
+            item.netDefaults(netItem.NetId);
+            item.stack = netItem.Stack;
+            item.prefix = netItem.PrefixId;
+            return item;
         }
 
         #endregion
