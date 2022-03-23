@@ -27,6 +27,7 @@ namespace Gravebags
 
         static readonly int TotalSlots = NetItem.InventorySlots + NetItem.ArmorSlots
             + NetItem.DyeSlots + NetItem.MiscEquipSlots + NetItem.MiscDyeSlots;
+        static readonly int CursorSlotIndex = NetItem.InventorySlots - 1;
 
         #region Info
         public override string Name => "Gravebags";
@@ -99,7 +100,7 @@ namespace Gravebags
             int i = 0;
             foreach (NetItem item in inventory)
             {
-                if (ShouldIgnoreItem(item.NetId)) continue;
+                if (IsEmptyOrIgnoredItem(item)) continue;
 
                 int last = i;
                 do
@@ -119,7 +120,7 @@ namespace Gravebags
                 } while (i != last);
             }
 
-            Gravebag bag = dbManager.PersistGravebag(Main.worldID, args.Player.Account.ID, args.Player.LastNetPosition, inventory);
+            Gravebag bag = dbManager.PersistGravebag(Main.worldID, args.Player.Account.ID, args.Player.LastNetPosition, inventory, (NetItem)player.trashItem);
 
             SpawnGravebag(bag);
         }
@@ -143,7 +144,7 @@ namespace Gravebags
 
             gravebags[itemID] = bag;
 
-            // Drop only for the player that died
+            // Prevent players from picking up unobtainable boss bag
             Main.item[itemID].playerIndexTheItemIsReservedFor = TSPlayer.Server.Index;
             Main.item[itemID].keepTime = int.MaxValue;
             TSPlayer.All.SendData(PacketTypes.ItemOwner, null, itemID);
@@ -155,6 +156,7 @@ namespace Gravebags
         void CheckGravebags(TSPlayer player)
         {
             if (player.Dead) return;
+
             foreach (int itemIndex in gravebags.Keys.ToList())
             {
                 Gravebag bag = gravebags[itemIndex];
@@ -183,10 +185,8 @@ namespace Gravebags
                 // sync bag position
                 NetMessage.SendData((int)PacketTypes.ItemDrop, -1, -1, null, itemIndex);
 
-                // init playersNearGravebag
-                int accountID = player.Account.ID;
-
                 // check within 3 blocks
+                int accountID = player.Account.ID;
                 if (distance <= 48.0)
                 {
                     if (accountID == bag.accountID)
@@ -218,12 +218,17 @@ namespace Gravebags
             for (int i = 0; i < TotalSlots; i++)
             {
                 Item bagItem = NetItemToItem(bag.inventory[i]);
-                if (ShouldIgnoreItem(bagItem.netID)) continue;
+                if (IsEmptyOrIgnoredItem(bagItem)) continue;
 
                 GetSubInventoryIndex(player.TPlayer, i, out Item[] subInv, out int index);
 
-                // if SSC-enabled and inv slot is empty and item passes accessory check, pick up item from bag
-                if (Main.ServerSideCharacter && ShouldIgnoreItem(subInv[index].netID)
+                // Checks made to auto-fill inventory slot:
+                // - SSC must be enabled
+                // - Current inventory slot is empty or ignored item
+                // - Current inventory slot is not cursor slot
+                // - Bag accessory does not clash with other accessories on player
+                // Trash slot is auto-filled if SSC is enabled
+                if (Main.ServerSideCharacter && IsEmptyOrIgnoredItem(subInv[index]) && index != CursorSlotIndex
                     && !(ReferenceEquals(subInv, player.TPlayer.armor) && ItemSlot.AccCheck(subInv, bagItem, index)))
                 {
                     subInv[index] = bagItem;
@@ -244,16 +249,16 @@ namespace Gravebags
             {
                 foreach (int i in pickUpItems)
                 {
-                    Item item = NetItemToItem(bag.inventory[i]);
+                    Item bagItem = NetItemToItem(bag.inventory[i]);
 
                     // Fill item server-side first, since item is not immediately updated server-side. This simulates
                     // the item entering the players inventory, so that we can calculate whether the player can take more.
-                    if (player.TPlayer.ItemSpace(item).CanTakeItem)
+                    if (player.TPlayer.ItemSpace(bagItem).CanTakeItem)
                     {
-                        Item leftoverItem = player.TPlayer.GetItem(-1, item.Clone(), GetItemSettings.PickupItemFromWorld);
+                        Item leftoverItem = player.TPlayer.GetItem(-1, bagItem.Clone(), GetItemSettings.PickupItemFromWorld);
 
                         int itemIndex = Item.NewItem(new EntitySource_DebugCommand(), player.TPlayer.position, Vector2.Zero,
-                            item.netID, item.stack - leftoverItem.stack, false, item.prefix, true);
+                            bagItem.netID, bagItem.stack - leftoverItem.stack, false, bagItem.prefix, true);
 
                         Main.item[itemIndex].playerIndexTheItemIsReservedFor = player.Index;
                         player.SendData(PacketTypes.ItemOwner, null, itemIndex);
@@ -265,11 +270,23 @@ namespace Gravebags
                 }
             }
 
+
+            // Handle trash item
+            if (Main.ServerSideCharacter && !IsEmptyOrIgnoredItem(bag.trashItem) && IsEmptyOrIgnoredItem(player.TPlayer.trashItem))
+            {
+                player.TPlayer.trashItem = NetItemToItem(bag.trashItem);
+                bag.trashItem = new NetItem();
+                NetMessage.SendData((int)PacketTypes.PlayerSlot, -1, -1, null, player.Index, NetItem.TrashIndex.Item1, bag.trashItem.PrefixId);
+                pickedUp++;
+            }
+
             if (pickedUp > 0)
             {
-                player.SendInfoMessage("[Gravebags] You picked up {0} item{1}. {2} item{3} left.", 
+                player.SendInfoMessage("[Gravebags] You picked up {0} item{1}. {2} item{3} left.",
                     pickedUp, pickedUp == 1 ? "" : "s", overflowCount, overflowCount == 1 ? "" : "s");
                 TShock.Log.ConsoleDebug("[Gravebags] Pick up {0} item {1} pickUp {2} count {3} overflow {4}", bag.ID, itemID, pickUpItems.Count, pickedUp, overflowCount);
+                
+                if (overflowCount > 0) dbManager.UpdateGravebagInventory(bag.ID, bag.inventory, bag.trashItem);
             }
 
             if (overflowCount > 0) return;
@@ -318,12 +335,13 @@ namespace Gravebags
             }
         }
 
-        bool ShouldIgnoreItem(int netID)
+        bool IsEmptyOrIgnoredItem(Item item) { return IsEmptyOrIgnoredItem((NetItem)item); }
+        bool IsEmptyOrIgnoredItem(NetItem item)
         {
-            return netID == ItemID.None ||
-                    netID == ItemID.CopperShortsword ||
-                    netID == ItemID.CopperPickaxe ||
-                    netID == ItemID.CopperAxe;
+            return item.NetId == ItemID.None ||
+                    item.NetId == ItemID.CopperShortsword ||
+                    item.NetId == ItemID.CopperPickaxe ||
+                    item.NetId == ItemID.CopperAxe;
         }
 
         /// <summary>
