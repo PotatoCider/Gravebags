@@ -6,17 +6,22 @@ using Terraria;
 using Terraria.DataStructures;
 using TerrariaApi.Server;
 using TShockAPI;
+using TShockAPI.DB;
 using Microsoft.Xna.Framework;
 using Terraria.ID;
 using System.Collections.Generic;
+using Terraria.UI;
 
 namespace Gravebags
 {
     [ApiVersion(2, 1)]
     public class GravebagPlugin : TerrariaPlugin
     {
-        // Gravebags by Main.item index
+        // Dictionary<itemIndex, gravebag>
         private Dictionary<int, Gravebag> gravebags = new Dictionary<int, Gravebag>();
+
+        // Dictionary<accountID, List<itemIndex>>
+        private Dictionary<int, int> gravebagsNearPlayer = new Dictionary<int, int>();
 
         public GravebagManager dbManager;
 
@@ -42,6 +47,7 @@ namespace Gravebags
 
             GetDataHandlers.KillMe.Register(OnKillMe);
             GetDataHandlers.PlayerUpdate.Register(OnPlayerUpdate);
+            GetDataHandlers.PlayerSlot.Register(OnPlayerSlot);
         }
         #endregion
 
@@ -53,6 +59,7 @@ namespace Gravebags
                 ServerApi.Hooks.GamePostInitialize.Deregister(this, OnGamePostInitialize);
                 GetDataHandlers.KillMe.UnRegister(OnKillMe);
                 GetDataHandlers.PlayerUpdate.UnRegister(OnPlayerUpdate);
+                GetDataHandlers.PlayerSlot.UnRegister(OnPlayerSlot);
             }
             base.Dispose(disposing);
         }
@@ -68,7 +75,7 @@ namespace Gravebags
 
         void OnGamePostInitialize(EventArgs args)
         {
-            TShock.Log.Debug("[Gravebags] Post Initialize");
+            TShock.Log.ConsoleDebug("[Gravebags] Post Initialize");
             List<Gravebag> bags = dbManager.GetAllGravebags(Main.worldID);
             foreach (Gravebag bag in bags)
             {
@@ -92,7 +99,7 @@ namespace Gravebags
             int i = 0;
             foreach (NetItem item in inventory)
             {
-                if (item.Stack == 0 || IsMediumcoreIgnoredItem(item.NetId)) continue;
+                if (ShouldIgnoreItem(item.NetId)) continue;
 
                 int last = i;
                 do
@@ -120,7 +127,12 @@ namespace Gravebags
 
         void OnPlayerUpdate(object _, GetDataHandlers.PlayerUpdateEventArgs args)
         {
-            if (!args.Player.Dead) CheckGravebags(args.Player);
+            CheckGravebags(args.Player);
+        }
+
+        void OnPlayerSlot(object _, GetDataHandlers.PlayerSlotEventArgs args)
+        {
+            if (gravebagsNearPlayer.ContainsKey(args.Player.Account.ID)) CheckGravebags(args.Player);
         }
 
         #endregion
@@ -136,12 +148,13 @@ namespace Gravebags
             Main.item[itemID].keepTime = int.MaxValue;
             TSPlayer.All.SendData(PacketTypes.ItemOwner, null, itemID);
 
-            TShock.Log.Debug("[Gravebags] Spawn {0} item {1}", bag.ID, itemID);
+            TShock.Log.ConsoleDebug("[Gravebags] Spawn {0} item {1} pos ({2} {3})", bag.ID, itemID, bag.position.X / 16.0, bag.position.Y / 16.0);
             return itemID;
         }
 
         void CheckGravebags(TSPlayer player)
         {
+            if (player.Dead) return;
             foreach (int itemIndex in gravebags.Keys.ToList())
             {
                 Gravebag bag = gravebags[itemIndex];
@@ -164,18 +177,32 @@ namespace Gravebags
                 {
                     bag.position = floorItem.position;
                     dbManager.UpdateGravebagPosition(bag.ID, bag.position);
-                    TShock.Log.Debug("[Gravebags] Update Position {0} item {1} pos ({2}, {3})", bag.ID, itemIndex, bag.position.X, bag.position.Y);
+                    TShock.Log.ConsoleDebug("[Gravebags] Update Position {0} item {1} pos ({2} {3})", bag.ID, itemIndex, bag.position.X / 16.0, bag.position.Y / 16.0);
                 }
 
                 // sync bag position
                 NetMessage.SendData((int)PacketTypes.ItemDrop, -1, -1, null, itemIndex);
 
-                if (player.Account.ID != bag.accountID) continue;
+                // init playersNearGravebag
+                int accountID = player.Account.ID;
 
                 // check within 3 blocks
                 if (distance <= 48.0)
                 {
-                    PickupGravebag(player, itemIndex);
+                    if (accountID == bag.accountID)
+                    {
+                        PickupGravebag(player, itemIndex);
+                    }
+                    else if (!gravebagsNearPlayer.TryGetValue(player.Account.ID, out int index) || index != itemIndex)
+                    {
+                        UserAccount bagOwner = TShock.UserAccounts.GetUserAccountByID(bag.accountID);
+                        player.SendInfoMessage("[Gravebags] {0}'s gravebag.", bagOwner.Name);
+                    }
+                    gravebagsNearPlayer[accountID] = itemIndex;
+                }
+                else
+                {
+                    gravebagsNearPlayer.Remove(accountID);
                 }
             }
         }
@@ -185,27 +212,25 @@ namespace Gravebags
             Gravebag bag = gravebags[itemID];
 
             List<int> pickUpItems = new List<int>();
+            int pickedUp = 0;
 
+            // Try to fill items using SSC
             for (int i = 0; i < TotalSlots; i++)
             {
-                NetItem item = bag.inventory[i];
-                if (item.NetId == ItemID.None || IsMediumcoreIgnoredItem(item.NetId)) continue;
+                Item bagItem = NetItemToItem(bag.inventory[i]);
+                if (ShouldIgnoreItem(bagItem.netID)) continue;
 
-                if (Main.ServerSideCharacter)
+                GetSubInventoryIndex(player.TPlayer, i, out Item[] subInv, out int index);
+
+                // if SSC-enabled and inv slot is empty and item passes accessory check, pick up item from bag
+                if (Main.ServerSideCharacter && ShouldIgnoreItem(subInv[index].netID)
+                    && !(ReferenceEquals(subInv, player.TPlayer.armor) && ItemSlot.AccCheck(subInv, bagItem, index)))
                 {
-                    GetSubInventoryIndex(player.TPlayer, i, out Item[] subInv, out int index);
-                    if (subInv[index].netID == ItemID.None || IsMediumcoreIgnoredItem(subInv[index].netID))
-                    {
-                        subInv[index] = NetItemToItem(item);
+                    subInv[index] = bagItem;
+                    NetMessage.SendData((int)PacketTypes.PlayerSlot, -1, -1, null, player.Index, i, bagItem.prefix);
 
-                        NetMessage.SendData((int)PacketTypes.PlayerSlot, -1, -1, null, player.Index, i, item.PrefixId);
-
-                        bag.inventory[i] = new NetItem();
-                    }
-                    else
-                    {
-                        pickUpItems.Add(i);
-                    }
+                    bag.inventory[i] = new NetItem();
+                    pickedUp++;
                 }
                 else
                 {
@@ -214,8 +239,7 @@ namespace Gravebags
             }
 
             // Give remaining items
-            bool overflow = false;
-            bool pickUp = false;
+            int overflowCount = 0;
             if (pickUpItems.Count > 0)
             {
                 foreach (int i in pickUpItems)
@@ -226,28 +250,31 @@ namespace Gravebags
                     // the item entering the players inventory, so that we can calculate whether the player can take more.
                     if (player.TPlayer.ItemSpace(item).CanTakeItem)
                     {
-                        player.TPlayer.GetItem(-1, item, GetItemSettings.PickupItemFromWorld);
-                        int itemIndex = Item.NewItem(new EntitySource_DebugCommand(), player.LastNetPosition, Vector2.Zero, 
-                            item.netID, item.stack, false, item.prefix, true);
+                        Item leftoverItem = player.TPlayer.GetItem(-1, item.Clone(), GetItemSettings.PickupItemFromWorld);
+
+                        int itemIndex = Item.NewItem(new EntitySource_DebugCommand(), player.TPlayer.position, Vector2.Zero,
+                            item.netID, item.stack - leftoverItem.stack, false, item.prefix, true);
 
                         Main.item[itemIndex].playerIndexTheItemIsReservedFor = player.Index;
                         player.SendData(PacketTypes.ItemOwner, null, itemIndex);
 
-                        bag.inventory[i] = new NetItem();
-                        pickUp = true;
+                        bag.inventory[i] = (NetItem)leftoverItem;
+                        pickedUp++;
                     }
-                    else
-                    {
-                        overflow = true;
-                    }
+                    if (bag.inventory[i].Stack > 0) overflowCount++;
                 }
             }
 
-            if (pickUp) TShock.Log.Debug("[Gravebags] Pick up {0} item {1}", bag.ID, itemID);
+            if (pickedUp > 0)
+            {
+                player.SendInfoMessage("[Gravebags] You picked up {0} item{1}. {2} item{3} left.", 
+                    pickedUp, pickedUp == 1 ? "" : "s", overflowCount, overflowCount == 1 ? "" : "s");
+                TShock.Log.ConsoleDebug("[Gravebags] Pick up {0} item {1} pickUp {2} count {3} overflow {4}", bag.ID, itemID, pickUpItems.Count, pickedUp, overflowCount);
+            }
 
-            if (overflow) return;
+            if (overflowCount > 0) return;
 
-            TShock.Log.Debug("[Gravebags] Delete {0} item {1}", bag.ID, itemID);
+            TShock.Log.ConsoleDebug("[Gravebags] Delete {0} item {1}", bag.ID, itemID);
 
             gravebags.Remove(itemID);
             Main.item[itemID].active = false;
@@ -290,14 +317,20 @@ namespace Gravebags
                 throw new ArgumentOutOfRangeException("i", "Index out of range");
             }
         }
-        
-        bool IsMediumcoreIgnoredItem(int netID)
+
+        bool ShouldIgnoreItem(int netID)
         {
-            return netID == ItemID.CopperShortsword ||
+            return netID == ItemID.None ||
+                    netID == ItemID.CopperShortsword ||
                     netID == ItemID.CopperPickaxe ||
                     netID == ItemID.CopperAxe;
         }
 
+        /// <summary>
+        /// Converts a NetItem to an Item.
+        /// </summary>
+        /// <param name="netItem"></param>
+        /// <returns>A new instance of an Item.</returns>
         Item NetItemToItem(NetItem netItem)
         {
             Item item = new Item();
