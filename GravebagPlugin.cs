@@ -99,7 +99,7 @@ namespace Gravebags
         void OnKillMe(object _, GetDataHandlers.KillMeEventArgs args)
         {
             Player player = args.Player.TPlayer;
-            if (player.difficulty != PlayerDifficultyID.MediumCore 
+            if (player.difficulty != PlayerDifficultyID.MediumCore
                 && player.difficulty != PlayerDifficultyID.Hardcore) return;
 
             List<NetItem> inventory = new List<NetItem>(TotalSlots);
@@ -116,7 +116,7 @@ namespace Gravebags
             {
                 if (IsEmptyOrIgnoredItem(item)) continue;
                 anyItemDropped = true;
-                
+
                 int last = i;
                 do
                 {
@@ -134,7 +134,7 @@ namespace Gravebags
                     i = (i + 1) % 400;
                     if (i == last)
                     {
-                        TShock.Log.ConsoleError("Unable to suppress non-existent item drop ({0} {1} {2})", 
+                        TShock.Log.ConsoleError("Unable to suppress non-existent item drop ({0} {1} {2})",
                             item.NetId, item.Stack, item.PrefixId);
                     }
                 } while (i != last);
@@ -232,32 +232,13 @@ namespace Gravebags
             List<int> pickUpItems = new List<int>();
             int pickedUp = 0;
 
-            // Try to fill items using SSC
-            for (int i = 0; i < TotalSlots; i++)
+            if (Main.ServerSideCharacter)
             {
-                Item bagItem = NetItemToItem(bag.inventory[i]);
-                if (IsEmptyOrIgnoredItem(bagItem)) continue;
-
-                GetSubInventoryIndex(player.TPlayer, i, out Item[] subInv, out int index);
-
-                // Checks made to auto-fill inventory slot:
-                // - SSC must be enabled
-                // - Current inventory slot is empty or ignored item
-                // - Current inventory slot is not cursor slot
-                // - Bag accessory does not clash with other accessories on player
-                if (Main.ServerSideCharacter && IsEmptyOrIgnoredItem(subInv[index]) && index != CursorSlotIndex
-                    && !(ReferenceEquals(subInv, player.TPlayer.armor) && ItemSlot.AccCheck(subInv, bagItem, index)))
-                {
-                    subInv[index] = bagItem;
-                    player.SendData(PacketTypes.PlayerSlot, null, player.Index, i, bagItem.prefix);
-
-                    bag.inventory[i] = new NetItem();
-                    pickedUp++;
-                }
-                else
-                {
-                    pickUpItems.Add(i);
-                }
+                pickedUp += FillSSCInventory(player, bag, pickUpItems);
+            }
+            else
+            {
+                AppendNonSSCPickupItems(bag, pickUpItems);
             }
 
             // Give remaining items
@@ -287,7 +268,6 @@ namespace Gravebags
                     if (bag.inventory[i].Stack > 0) overflowCount++;
                 }
             }
-
 
             // Handle trash item
             if (Main.ServerSideCharacter && !IsEmptyOrIgnoredItem(bag.trashItem))
@@ -324,6 +304,77 @@ namespace Gravebags
         }
 
         #region Helpers
+
+        int FillSSCInventory(TSPlayer player, Gravebag bag, List<int> pickUpItems)
+        {
+            int pickedUp = 0;
+            for (int i = 0; i < TotalSlots; i++)
+            {
+                Item bagItem = NetItemToItem(bag.inventory[i]);
+                if (IsEmptyOrIgnoredItem(bagItem)) continue;
+
+                GetSubInventoryIndex(player.TPlayer, i, out Item[] subInv, out int index);
+
+                // Checks made to auto-fill inventory slot:
+                // - SSC must be enabled
+                // - Current inventory slot is empty or ignored item
+                // - Current inventory slot is not cursor slot
+                // - Bag accessory does not clash with other accessories on player
+                if (IsEmptyOrIgnoredItem(subInv[index]) && index != CursorSlotIndex
+                    && !(ReferenceEquals(subInv, player.TPlayer.armor) && ItemSlot.AccCheck(subInv, bagItem, index)))
+                {
+                    subInv[index] = bagItem;
+                    player.SendData(PacketTypes.PlayerSlot, null, player.Index, i, bagItem.prefix);
+
+                    bag.inventory[i] = new NetItem();
+                    pickedUp++;
+                }
+                else
+                {
+                    pickUpItems.Add(i);
+                }
+            }
+            return pickedUp;
+        }
+
+        void AppendNonSSCPickupItems(Gravebag bag, List<int> pickUpItems)
+        {
+            // Hotbar
+            for (int i = NetItem.InventoryIndex.Item1; i < NetItem.InventoryIndex.Item1 + 10; i++)
+            {
+                if (!IsEmptyOrIgnoredItem(bag.inventory[i])) pickUpItems.Add(i);
+            }
+            // Armor (non vanity)
+            for (int i = NetItem.ArmorIndex.Item1; i < NetItem.ArmorIndex.Item1 + 10; i++)
+            {
+                if (!IsEmptyOrIgnoredItem(bag.inventory[i])) pickUpItems.Add(i);
+            }
+            // MiscEquips
+            for (int i = NetItem.MiscEquipIndex.Item1; i < NetItem.MiscEquipIndex.Item2; i++)
+            {
+                if (!IsEmptyOrIgnoredItem(bag.inventory[i])) pickUpItems.Add(i);
+            }
+            // Inventory
+            for (int i = NetItem.InventoryIndex.Item1 + 10; i < NetItem.InventoryIndex.Item2; i++)
+            {
+                if (!IsEmptyOrIgnoredItem(bag.inventory[i])) pickUpItems.Add(i);
+            }
+            // Armor (vanity)
+            for (int i = NetItem.ArmorIndex.Item1 + 10; i < NetItem.ArmorIndex.Item2; i++)
+            {
+                if (!IsEmptyOrIgnoredItem(bag.inventory[i])) pickUpItems.Add(i);
+            }
+            // Dyes
+            for (int i = NetItem.DyeIndex.Item1; i < NetItem.DyeIndex.Item2; i++)
+            {
+                if (!IsEmptyOrIgnoredItem(bag.inventory[i])) pickUpItems.Add(i);
+            }
+            // MiscDyes
+            for (int i = NetItem.MiscDyeIndex.Item1; i < NetItem.MiscDyeIndex.Item2; i++)
+            {
+                if (!IsEmptyOrIgnoredItem(bag.inventory[i])) pickUpItems.Add(i);
+            }
+        }
 
         void GetSubInventoryIndex(Player player, int i, out Item[] subInv, out int index)
         {
