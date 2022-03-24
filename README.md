@@ -19,7 +19,7 @@ Server Side Characters is recommended for more convienent inventory management.
 
 # Planned Features
 - [x] Persist gravebags after server restart
-- [ ] Notify player of gravebag info when near bag
-- [ ] Add a way for other players to pick up other player's gravebags
-- [ ] Drop gravebags for hardcore players
+- [x] Notify player of gravebag info when near bag
+- [x] Add a way for other players to pick up other player's gravebags
+- [x] Drop gravebags for hardcore players
 - [ ] Add an admin command to recover gravebags in case something went wrong
