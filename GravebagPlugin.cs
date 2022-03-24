@@ -111,10 +111,12 @@ namespace Gravebags
 
             // suppress item drops
             int i = 0;
+            bool anyItemDropped = false;
             foreach (NetItem item in inventory)
             {
                 if (IsEmptyOrIgnoredItem(item)) continue;
-
+                anyItemDropped = true;
+                
                 int last = i;
                 do
                 {
@@ -127,15 +129,20 @@ namespace Gravebags
                         Main.item[i].netDefaults(ItemID.None);
                         Main.item[i].active = false;
                         TSPlayer.All.SendData(PacketTypes.ItemDrop, null, i);
-
                         break;
                     }
                     i = (i + 1) % 400;
+                    if (i == last)
+                    {
+                        TShock.Log.ConsoleError("Unable to suppress non-existent item drop ({0} {1} {2})", 
+                            item.NetId, item.Stack, item.PrefixId);
+                    }
                 } while (i != last);
             }
 
-            Gravebag bag = dbManager.PersistGravebag(Main.worldID, args.Player.Account.ID, args.Player.TPlayer.position, inventory, (NetItem)player.trashItem);
+            if (!anyItemDropped) return;
 
+            Gravebag bag = dbManager.PersistGravebag(Main.worldID, args.Player.Account.ID, args.Player.TPlayer.position, inventory, (NetItem)player.trashItem);
             SpawnGravebag(bag);
         }
 
