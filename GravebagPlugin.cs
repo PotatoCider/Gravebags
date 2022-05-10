@@ -79,7 +79,7 @@ namespace Gravebags
             }
             else
             {
-                args.Player.SendInfoMessage("There are no bags around you to pick up.");
+                args.Player.SendInfoMessage("[Gravebags] There are no bags around you to pick up.");
             }
         }
         #endregion
@@ -134,7 +134,7 @@ namespace Gravebags
                     i = (i + 1) % 400;
                     if (i == last)
                     {
-                        TShock.Log.ConsoleError("Unable to suppress non-existent item drop ({0} {1} {2})",
+                        TShock.Log.ConsoleError("[Gravebags] Unable to suppress non-existent item drop ({0} {1} {2})",
                             item.NetId, item.Stack, item.PrefixId);
                     }
                 } while (i != last);

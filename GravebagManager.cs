@@ -58,7 +58,7 @@ namespace Gravebags
 
         public bool UpdateGravebagInventory(int id, List<NetItem> inventory, NetItem trashItem)
         {
-            return database.Query("UPDATE Gravebags SET Inventory = @0, TrashItem = @1 WHERE ID = @2", inventory, trashItem, id) > 0;
+            return database.Query("UPDATE Gravebags SET Inventory = @0, TrashItem = @1 WHERE ID = @2", string.Join("~", inventory), trashItem, id) > 0;
         }
 
         public bool RemoveGravebag(int id)
