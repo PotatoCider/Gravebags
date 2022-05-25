@@ -7,12 +7,9 @@ using TShockAPI;
 using Microsoft.Xna.Framework;
 using Terraria;
 
-namespace Gravebags
-{
-    public class Gravebag
-    {
-        public Gravebag(int id, int accID, Vector2 deathPos, List<NetItem> inv, NetItem trash)
-        {
+namespace Gravebags {
+    public class Gravebag {
+        public Gravebag(int id, int accID, Vector2 deathPos, List<NetItem> inv, NetItem trash) {
             ID = id;
             accountID = accID;
             position = deathPos;
