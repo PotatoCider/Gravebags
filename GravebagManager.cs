@@ -33,7 +33,7 @@ namespace Gravebags {
             } else {
                 query += "SELECT CAST(last_insert_rowid() as INT);";
             }
-            int id = database.QueryScalar<int>(query, worldID, accountID, position.X, position.Y, string.Join("~", inv), trashItem);
+            int id = database.QueryScalar<int>(query, worldID, accountID, position.X, position.Y, string.Join("~", inv), trashItem.ToString());
             return new Gravebag(id, accountID, position, inv, trashItem);
         }
 
@@ -42,7 +42,7 @@ namespace Gravebags {
         }
 
         public bool UpdateGravebagInventory(int id, List<NetItem> inventory, NetItem trashItem) {
-            return database.Query("UPDATE Gravebags SET Inventory = @0, TrashItem = @1 WHERE ID = @2", string.Join("~", inventory), trashItem, id) > 0;
+            return database.Query("UPDATE Gravebags SET Inventory = @0, TrashItem = @1 WHERE ID = @2", string.Join("~", inventory), trashItem.ToString(), id) > 0;
         }
 
         public bool RemoveGravebag(int id) {
