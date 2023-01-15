@@ -1,15 +1,6 @@
-﻿using System;
-using System.Linq;
-using System.Reflection;
-using Terraria;
+﻿using System.Reflection;
 using Terraria.DataStructures;
-using TerrariaApi.Server;
-using TShockAPI;
 using TShockAPI.DB;
-using Microsoft.Xna.Framework;
-using Terraria.ID;
-using System.Collections.Generic;
-using Terraria.UI;
 
 namespace Gravebags {
     [ApiVersion(2, 1)]
@@ -280,7 +271,7 @@ namespace Gravebags {
                 // - Current inventory slot is not cursor slot
                 // - Bag accessory does not clash with other accessories on player
                 if (IsEmptyOrIgnoredItem(subInv[index]) && index != CursorSlotIndex
-                    && !(ReferenceEquals(subInv, player.TPlayer.armor) && ItemSlot.AccCheck(subInv, bagItem, index))) {
+                    && !(ReferenceEquals(subInv, player.TPlayer.armor) && Terraria.UI.ItemSlot.AccCheck(subInv, bagItem, index))) {
                     subInv[index] = bagItem;
                     player.SendData(PacketTypes.PlayerSlot, null, player.Index, i, bagItem.prefix);
 
